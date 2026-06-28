@@ -60,15 +60,15 @@ async def dashboard_overview():
             JOIN lines ON nodes.line_id = lines.id
             JOIN zones ON lines.zone_id = zones.id
             LEFT JOIN trains ON alerts.nearest_train_id = trains.id
-            WHERE alerts.status = 'active' AND alerts.severity = 'critical'
+            WHERE alerts.status = 'active' AND alerts.severity IN ('critical', 'warning')
             ORDER BY alerts.detected_at DESC
-            LIMIT 1;
+            LIMIT 5;
             """
         )
-        latest_critical = await cur.fetchone()
+        latest_critical_alerts = await cur.fetchall()
 
         affected_trains = []
-        if latest_critical:
+        for critical_alert in latest_critical_alerts:
             await cur.execute(
                 """
                 SELECT trains.id, trains.number, alert_affected_trains.distance_from_incident, alert_affected_trains.eta_min, alert_affected_trains.status
@@ -78,19 +78,21 @@ async def dashboard_overview():
                 ORDER BY alert_affected_trains.distance_from_incident ASC
                 LIMIT 5;
                 """,
-                (latest_critical["id"],),
+                (critical_alert["id"],),
             )
             affected_rows = await cur.fetchall()
-            affected_trains = [
-                {
-                    "id": str(row["id"]),
-                    "number": row["number"],
-                    "distanceFromIncidentKm": float(row["distance_from_incident"]),
-                    "etaMin": row["eta_min"],
-                    "status": row["status"],
-                }
-                for row in affected_rows
-            ]
+            affected_trains.extend(
+                [
+                    {
+                        "id": str(row["id"]),
+                        "number": row["number"],
+                        "distanceFromIncidentKm": float(row["distance_from_incident"]),
+                        "etaMin": row["eta_min"],
+                        "status": row["status"],
+                    }
+                    for row in affected_rows
+                ]
+            )
 
     return {
         "activeAlerts": active_alerts,
@@ -100,7 +102,7 @@ async def dashboard_overview():
         "onlineNodes": online_nodes,
         "activeTrains": active_trains,
         "systemHealth": system_health,
-        "critical": serialize_alert(latest_critical),
+        "critical": [serialize_alert(alert) for alert in latest_critical_alerts],
         "affectedTrains": affected_trains,
     }
 

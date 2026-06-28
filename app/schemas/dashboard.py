@@ -43,7 +43,7 @@ class DashboardOverviewResponse(BaseModel):
     onlineNodes: int
     activeTrains: int
     systemHealth: int
-    critical: Optional[DashboardCriticalAlert]
+    critical: list[DashboardCriticalAlert]
     affectedTrains: list[AffectedTrainOut]
 
     class Config:
