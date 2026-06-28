@@ -55,8 +55,8 @@ async def list_alerts(
     page: int = Query(1, ge=1),
     pageSize: int = Query(10, ge=1),
     search: Optional[str] = None,
-    severity: str = Query("all", regex="^(all|critical|warning|info)$"),
-    status: str = Query("all", regex="^(all|active|acknowledged|resolved)$"),
+    severity: str = Query("all", pattern="^(all|critical|warning|info)$"),
+    status: str = Query("all", pattern="^(all|active|acknowledged|resolved)$"),
     zone: Optional[str] = None,
     line: Optional[str] = None,
 ):
@@ -178,7 +178,7 @@ async def escalate_alert(alert_id: str, payload: dict):
 
 
 @router.get("/alerts/{alert_id}/export")
-async def export_alert(alert_id: str, format: str = Query("pdf", regex="^(pdf|csv)$")):
+async def export_alert(alert_id: str, format: str = Query("pdf", pattern="^(pdf|csv)$")):
     async with get_cursor() as cur:
         await cur.execute("SELECT id FROM alerts WHERE id = %s", (alert_id,))
         if not await cur.fetchone():

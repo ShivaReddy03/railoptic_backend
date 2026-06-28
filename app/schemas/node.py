@@ -10,4 +10,4 @@ class NodeOut(BaseModel):
 
     class Config:
         alias_generator = lambda string: string
-        allow_population_by_field_name = True
+        validate_by_name = True
