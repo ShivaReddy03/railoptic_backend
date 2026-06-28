@@ -51,10 +51,6 @@ async def infer_image(image_bytes: bytes) -> dict:
     if not url or not api_key or not workspace_name or not workflow_id:
         raise RoboflowInferenceError("Missing Roboflow workflow configuration")
 
-    if url.rstrip("/") == "https://serverless.roboflow.com":
-        raise RoboflowInferenceError(
-            "Invalid Roboflow workflow configuration. Provide ROBOFLOW_WORKFLOW_WORKSPACE and ROBOFLOW_WORKFLOW_ID in .env."
-        )
 
     try:
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -70,12 +66,14 @@ async def infer_image(image_bytes: bytes) -> dict:
             }
         }
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Increased timeout to 120 seconds for cold starts
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(api_url, json=payload)
             
             # Read response
             try:
                 data = response.json()
+                print("API Response:", data)
             except Exception:
                 response.raise_for_status()
                 raise
