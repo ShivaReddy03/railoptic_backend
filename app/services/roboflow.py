@@ -42,7 +42,71 @@ def _extract_top_prediction(data: dict) -> dict:
     return top_prediction
 
 
-async def infer_image(image_bytes: bytes) -> dict:
+def _summarize_inference_response(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return {
+            "hazard_count": 0,
+            "risk_level": "none",
+            "top_prediction": {"class": None, "confidence": 0.0},
+            "max_area_px": None,
+        }
+
+    if isinstance(data.get("outputs"), list) and data["outputs"]:
+        candidate = data["outputs"][0]
+        if not isinstance(candidate, dict):
+            candidate = {}
+    else:
+        candidate = data
+
+    hazard_count = int(candidate.get("hazard_count") or data.get("hazard_count") or 0)
+    if hazard_count == 0 and isinstance(candidate.get("results"), list) and candidate["results"]:
+        hazard_count = int(candidate["results"][0].get("hazard_count") or 0)
+
+    hazard_levels = []
+    if hazard := candidate.get("hazard_predictions_in_roi"):
+        hazard_levels.extend(
+            p.get("risk_level")
+            for p in hazard.get("predictions", [])
+            if p.get("risk_level")
+        )
+    if not hazard_levels and isinstance(candidate.get("results"), list):
+        for item in candidate["results"]:
+            if hazard := item.get("hazard_predictions_in_roi"):
+                hazard_levels.extend(
+                    p.get("risk_level")
+                    for p in hazard.get("predictions", [])
+                    if p.get("risk_level")
+                )
+    if not hazard_levels and isinstance(data.get("outputs"), list):
+        for item in data["outputs"]:
+            if not isinstance(item, dict):
+                continue
+            if hazard := item.get("hazard_predictions_in_roi"):
+                hazard_levels.extend(
+                    p.get("risk_level")
+                    for p in hazard.get("predictions", [])
+                    if p.get("risk_level")
+                )
+            if not hazard_levels and item.get("risk_level"):
+                hazard_levels.append(item.get("risk_level"))
+
+    for item in candidate.get("object_boundaries_and_sizes", []) or []:
+        if item.get("danger_level"):
+            hazard_levels.append(item.get("danger_level"))
+
+    risk_level = _normalize_risk_levels(hazard_levels)
+    top_prediction = _extract_top_prediction(candidate)
+    max_area_px = candidate.get("max_area_px") or data.get("max_area_px")
+
+    return {
+        "hazard_count": hazard_count,
+        "risk_level": risk_level,
+        "top_prediction": top_prediction,
+        "max_area_px": max_area_px,
+    }
+
+
+async def infer_image(image_url: str) -> dict:
     url = os.getenv("ROBOFLOW_WORKFLOW_URL")
     api_key = os.getenv("ROBOFLOW_API_KEY")
     workspace_name = os.getenv("ROBOFLOW_WORKFLOW_WORKSPACE")
@@ -53,15 +117,14 @@ async def infer_image(image_bytes: bytes) -> dict:
 
 
     try:
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
         api_url = f"{url.rstrip('/')}/infer/workflows/{workspace_name}/{workflow_id}"
         
         payload = {
             "api_key": api_key,
             "inputs": {
                 "image": {
-                    "type": "base64",
-                    "value": base64_image
+                    "type": "url",
+                    "value": image_url
                 }
             }
         }
@@ -73,7 +136,7 @@ async def infer_image(image_bytes: bytes) -> dict:
             # Read response
             try:
                 data = response.json()
-                print("API Response:", data)
+                print(data)
             except Exception:
                 response.raise_for_status()
                 raise
@@ -89,36 +152,4 @@ async def infer_image(image_bytes: bytes) -> dict:
             f"Roboflow inference failed: {exc}"
         ) from exc
 
-    hazard_count = int(data.get("hazard_count") or 0)
-    if hazard_count == 0 and isinstance(data.get("results"), list) and data["results"]:
-        hazard_count = int(data["results"][0].get("hazard_count") or 0)
-
-    hazard_levels = []
-    if hazard := data.get("hazard_predictions_in_roi"):
-        hazard_levels.extend(
-            p.get("risk_level")
-            for p in hazard.get("predictions", [])
-            if p.get("risk_level")
-        )
-    if not hazard_levels and isinstance(data.get("results"), list):
-        for item in data["results"]:
-            if hazard := item.get("hazard_predictions_in_roi"):
-                hazard_levels.extend(
-                    p.get("risk_level")
-                    for p in hazard.get("predictions", [])
-                    if p.get("risk_level")
-                )
-    for item in data.get("object_boundaries_and_sizes", []) or []:
-        if item.get("danger_level"):
-            hazard_levels.append(item.get("danger_level"))
-
-    risk_level = _normalize_risk_levels(hazard_levels)
-    top_prediction = _extract_top_prediction(data)
-    max_area_px = data.get("max_area_px")
-
-    return {
-        "hazard_count": hazard_count,
-        "risk_level": risk_level,
-        "top_prediction": top_prediction,
-        "max_area_px": max_area_px,
-    }
+    return _summarize_inference_response(data)

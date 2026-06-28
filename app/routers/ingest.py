@@ -18,6 +18,12 @@ def _parse_iso_timestamp(timestamp: str) -> datetime:
     return datetime.fromisoformat(timestamp)
 
 
+def _coerce_detected_at(timestamp: str | None) -> datetime:
+    if timestamp:
+        return _parse_iso_timestamp(timestamp)
+    return datetime.now().astimezone()
+
+
 def _sanitize_timestamp(timestamp: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in timestamp)
 
@@ -46,11 +52,11 @@ async def ingest_detection(
     image: UploadFile = File(...),
     node_id: str = Form(...),
     lidar_dist_m: float = Form(...),
-    timestamp: str = Form(...),
+    timestamp: str | None = Form(None),
 ):
     logger.info(f"Received detection POST request for node_id={node_id}, timestamp={timestamp}")
     try:
-        detected_at = _parse_iso_timestamp(timestamp)
+        detected_at = _coerce_detected_at(timestamp)
     except ValueError:
         logger.error(f"Invalid timestamp format received: {timestamp}")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="timestamp must be valid ISO-8601")
@@ -81,15 +87,15 @@ async def ingest_detection(
 
         try:
             logger.info("Uploading image to Cloudflare R2...")
-            image_url = await upload_detection_image(image_bytes, node_id, _sanitize_timestamp(timestamp))
+            image_url = await upload_detection_image(image_bytes, node_id, _sanitize_timestamp(timestamp or detected_at.isoformat()))
             logger.info(f"Image successfully uploaded to R2: {image_url}")
         except Exception as exc:
             logger.exception("R2 upload failed")
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Image upload failed")
 
         try:
-            logger.info("Sending image to Roboflow for inference...")
-            roboflow_result = await infer_image(image_bytes)
+            logger.info("Sending R2 image URL to Roboflow for inference...")
+            roboflow_result = await infer_image(image_url)
             logger.info(f"Roboflow inference complete. Result: {roboflow_result}")
         except RoboflowInferenceError as exc:
             logger.exception("Roboflow inference failed")

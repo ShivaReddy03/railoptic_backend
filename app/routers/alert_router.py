@@ -97,7 +97,7 @@ async def list_alerts(
         JOIN zones ON lines.zone_id = zones.id
         LEFT JOIN trains ON alerts.nearest_train_id = trains.id
         {where_clause}
-        ORDER BY alerts.detected_at DESC
+        ORDER BY alerts.detected_at DESC, alerts.id DESC
         LIMIT %s OFFSET %s;
     """
 
