@@ -1,3 +1,4 @@
+import os
 import sys
 import asyncio
 
@@ -16,6 +17,8 @@ from app.routers.dashboard_router import router as dashboard_router
 from app.routers.alert_router import router as alert_router
 from app.routers.ingest import router as ingest_router
 from app.routers.ws_router import router as ws_router
+from app.routers.trains_router import router as trains_router
+from app.routers.reports_router import router as reports_router
 
 app = FastAPI(
     title="RailOptic API",
@@ -54,6 +57,8 @@ app.include_router(dashboard_router, tags=["Dashboard"])
 app.include_router(alert_router, tags=["Alerts"])
 app.include_router(ingest_router, prefix="/ingest", tags=["Ingest"])
 app.include_router(ws_router, tags=["WebSocket"])
+app.include_router(trains_router, tags=["Trains"])
+app.include_router(reports_router, tags=["Reports"])
 
 @app.on_event("startup")
 async def on_startup():
@@ -64,4 +69,5 @@ async def shutdown_event():
     await close_pool()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
