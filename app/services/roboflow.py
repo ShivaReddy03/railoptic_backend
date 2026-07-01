@@ -16,7 +16,7 @@ def _normalize_risk_levels(values):
     if not values:
         return "none"
     levels = [str(v).strip().lower() for v in values if v]
-    if "high" in levels:
+    if "high" in levels or "critical" in levels:
         return "high"
     if "medium" in levels:
         return "medium"
@@ -97,11 +97,24 @@ def _summarize_inference_response(data: dict) -> dict:
     risk_level = _normalize_risk_levels(hazard_levels)
     top_prediction = _extract_top_prediction(candidate)
     max_area_px = candidate.get("max_area_px") or data.get("max_area_px")
+    object_area_px = None
+
+    for item in candidate.get("object_boundaries_and_sizes", []) or []:
+        if not isinstance(item, dict):
+            continue
+        item_area = item.get("area_px")
+        if item_area is not None:
+            try:
+                object_area_px = float(item_area)
+                break
+            except (TypeError, ValueError):
+                continue
 
     return {
         "hazard_count": hazard_count,
         "risk_level": risk_level,
         "top_prediction": top_prediction,
+        "object_area_px": object_area_px,
         "max_area_px": max_area_px,
     }
 

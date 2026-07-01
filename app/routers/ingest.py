@@ -104,9 +104,22 @@ async def ingest_detection(
         hazard_count = roboflow_result["hazard_count"]
         top_prediction = roboflow_result["top_prediction"]
         risk_level = roboflow_result["risk_level"]
-        
-        logger.info(f"Computing risk score based on risk_level='{risk_level}' and lidar_dist_m={lidar_dist_m}...")
-        risk_score = compute_risk_score(risk_level, lidar_dist_m)
+        object_area_px = roboflow_result.get("object_area_px")
+        max_area_px = roboflow_result.get("max_area_px")
+
+        logger.info(
+            f"Computing risk score based on risk_level='{risk_level}', confidence={top_prediction['confidence']}, "
+            f"hazard_count={hazard_count}, class={top_prediction['class']}, lidar_dist_m={lidar_dist_m}..."
+        )
+        risk_score = compute_risk_score(
+            risk_level,
+            lidar_dist_m,
+            confidence=top_prediction.get("confidence"),
+            hazard_count=hazard_count,
+            class_name=top_prediction.get("class"),
+            object_area_px=object_area_px,
+            max_area_px=max_area_px,
+        )
         logger.info(f"Computed risk score: {risk_score}")
 
         alert_id = None
