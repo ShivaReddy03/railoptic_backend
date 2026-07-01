@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from app.schemas.ingest import IngestResponse
 from app.configuration.database import get_cursor
@@ -10,6 +10,62 @@ from app.routers.ws_router import ws_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _select_train_candidates(train_rows, line_id: int | None):
+    if not train_rows:
+        return []
+
+    same_line = [row for row in train_rows if row.get("line_id") == line_id]
+    fallback = [row for row in train_rows if row.get("line_id") != line_id and row.get("line_id") is not None]
+    candidates = same_line or (fallback or train_rows)
+
+    status_order = {"delayed": 0, "at_risk": 1, "monitor": 2, "safe": 3, "on_time": 4}
+
+    def sort_key(row):
+        status = str(row.get("status") or "on_time").strip().lower()
+        updated_at = row.get("updated_at")
+        if updated_at is None:
+            updated_at = datetime.min.replace(tzinfo=timezone.utc)
+        return (status_order.get(status, 99), updated_at, row.get("id", 0))
+
+    return sorted(candidates, key=sort_key)
+
+
+async def _assign_trains_to_alert(cur, alert_id: str, line_id: int | None):
+    await cur.execute(
+        "SELECT id, number, line_id, status, updated_at FROM trains WHERE line_id IS NOT NULL OR line_id IS NULL;"
+    )
+    train_rows = await cur.fetchall()
+    candidates = _select_train_candidates(train_rows, line_id)
+    if not candidates:
+        return None
+
+    nearest_train = candidates[0]
+    affected_candidates = candidates[:4]
+
+    await cur.execute(
+        "UPDATE alerts SET nearest_train_id = %s WHERE id = %s;",
+        (nearest_train["id"], alert_id),
+    )
+
+    for idx, train_row in enumerate(affected_candidates):
+        distance_from_incident = round(0.5 + (idx * 0.8), 2)
+        eta_min = max(2, int(distance_from_incident * 10))
+        await cur.execute(
+            "INSERT INTO alert_affected_trains (alert_id, train_id, distance_from_incident, eta_min, status) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (alert_id, train_id) DO NOTHING;",
+            (
+                alert_id,
+                train_row["id"],
+                distance_from_incident,
+                eta_min,
+                train_row["status"],
+            ),
+        )
+
+    return nearest_train
 
 
 def _parse_iso_timestamp(timestamp: str) -> datetime:
@@ -70,7 +126,7 @@ async def ingest_detection(
     async with get_cursor() as cur:
         logger.info(f"Verifying node_id={node_id} in database...")
         await cur.execute(
-            "SELECT nodes.id, lines.name AS line_name, zones.name AS zone_name "
+            "SELECT nodes.id, lines.id AS line_id, lines.name AS line_name, zones.name AS zone_name "
             "FROM nodes "
             "JOIN lines ON nodes.line_id = lines.id "
             "JOIN zones ON lines.zone_id = zones.id "
@@ -83,6 +139,7 @@ async def ingest_detection(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
 
         line_name = node_row["line_name"]
+        line_id = node_row.get("line_id")
         logger.info(f"Node {node_id} verified. Belongs to line '{line_name}' in zone '{node_row['zone_name']}'.")
 
         try:
@@ -156,6 +213,11 @@ async def ingest_detection(
                 ),
             )
             logger.info(f"Alert {alert_id} successfully saved to database.")
+            nearest_train = await _assign_trains_to_alert(cur, alert_id, line_id)
+            if nearest_train:
+                logger.info(f"Assigned nearest train {nearest_train['id']} to alert {alert_id}.")
+            else:
+                logger.info(f"No trains available to assign to alert {alert_id}.")
 
             payload = {
                 "event": "new_alert",
@@ -174,7 +236,7 @@ async def ingest_detection(
                     "status": "active",
                     "confidence": confidence,
                     "riskScore": risk_score,
-                    "nearestTrain": None,
+                    "nearestTrain": nearest_train["number"] if nearest_train else None,
                     "distanceKm": distance_km,
                     "etaSec": None,
                     "imageUrl": image_url,
