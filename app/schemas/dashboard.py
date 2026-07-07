@@ -26,6 +26,8 @@ class DashboardCriticalAlert(BaseModel):
 class AffectedTrainOut(BaseModel):
     id: str
     number: str
+    alertId: str
+    nodeId: str
     distanceFromIncidentKm: float
     etaMin: int
     status: str

@@ -106,6 +106,8 @@ async def dashboard_overview():
                     {
                         "id": str(row["id"]),
                         "number": row["number"],
+                        "alertId": critical_alert["id"],
+                        "nodeId": critical_alert["node_id"],
                         "distanceFromIncidentKm": float(row["distance_from_incident"]),
                         "etaMin": row["eta_min"],
                         "status": row["status"],
@@ -290,7 +292,31 @@ async def list_nodes():
     async with get_cursor() as cur:
         await cur.execute(
             """
-            SELECT nodes.id, lines.name AS line_name, nodes.lat, nodes.lng, nodes.status, nodes.health
+            SELECT nodes.id,
+                   lines.name AS line_name,
+                   nodes.lat,
+                   nodes.lng,
+                   CASE
+                       WHEN EXISTS (
+                           SELECT 1
+                           FROM alerts
+                           WHERE node_id = nodes.id AND status = 'active' AND severity = 'critical'
+                       ) THEN 'critical'
+                       WHEN EXISTS (
+                           SELECT 1
+                           FROM alerts
+                           WHERE node_id = nodes.id AND status = 'active' AND severity IN ('warning', 'info')
+                       ) THEN 'warning'
+                       ELSE nodes.status
+                   END AS current_status,
+                   nodes.health,
+                   (
+                       SELECT id
+                       FROM alerts
+                       WHERE node_id = nodes.id AND status = 'active'
+                       ORDER BY detected_at DESC
+                       LIMIT 1
+                   ) AS current_alert_id
             FROM nodes
             JOIN lines ON nodes.line_id = lines.id
             ORDER BY nodes.id ASC;
@@ -298,13 +324,23 @@ async def list_nodes():
         )
         rows = await cur.fetchall()
 
-    return [
-        {
-            "id": row["id"],
-            "line": row["line_name"],
-            "gps": {"lat": float(row["lat"]), "lng": float(row["lng"])},
-            "status": row["status"],
-            "health": row["health"],
-        }
-        for row in rows
-    ]
+    out = []
+    for row in rows:
+        current_alert = None
+        status = str(row.get("current_status") or "").strip().lower()
+        # Only expose currentAlertId to frontend when the node is in warning/critical state
+        if status in ("warning", "critical"):
+            current_alert = row.get("current_alert_id")
+
+        out.append(
+            {
+                "id": row["id"],
+                "line": row["line_name"],
+                "gps": {"lat": float(row["lat"]), "lng": float(row["lng"])},
+                "status": row["current_status"],
+                "health": row["health"],
+                "currentAlertId": current_alert,
+            }
+        )
+
+    return out

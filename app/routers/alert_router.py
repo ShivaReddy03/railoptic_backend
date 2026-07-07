@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 
 from app.configuration.database import get_cursor
+from app.routers.ws_router import ws_manager
 
 router = APIRouter()
 
@@ -155,6 +156,49 @@ async def acknowledge_alert(alert_id: str):
             "UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = %s RETURNING id;",
             (alert_id,),
         )
+        await cur.execute("DELETE FROM alert_affected_trains WHERE alert_id = %s;", (alert_id,))
+        # Recompute node status based on remaining active alerts for the node
+        await cur.execute("SELECT node_id FROM alerts WHERE id = %s", (alert_id,))
+        node_row = await cur.fetchone()
+        if node_row:
+            node_id = node_row["node_id"]
+            await cur.execute(
+                "SELECT severity FROM alerts WHERE node_id = %s AND status = 'active' "
+                "ORDER BY CASE WHEN severity='critical' THEN 3 WHEN severity='warning' THEN 2 ELSE 1 END DESC LIMIT 1;",
+                (node_id,),
+            )
+            sev_row = await cur.fetchone()
+            if sev_row and sev_row.get("severity"):
+                node_status = "critical" if sev_row["severity"] == "critical" else "warning"
+            else:
+                node_status = "normal"
+
+            await cur.execute("UPDATE nodes SET status = %s WHERE id = %s;", (node_status, node_id))
+
+            # Fetch updated alert row for broadcasting
+            await cur.execute(
+                """
+                SELECT alerts.*, nodes.line_id, lines.name AS line_name, zones.name AS zone_name,
+                       trains.number AS train_number
+                FROM alerts
+                JOIN nodes ON alerts.node_id = nodes.id
+                JOIN lines ON nodes.line_id = lines.id
+                JOIN zones ON lines.zone_id = zones.id
+                LEFT JOIN trains ON alerts.nearest_train_id = trains.id
+                WHERE alerts.id = %s
+                """,
+                (alert_id,),
+            )
+            alert_row = await cur.fetchone()
+            if alert_row:
+                try:
+                    await ws_manager.broadcast({"event": "alert_updated", "payload": row_to_alert_out(alert_row, line_name=alert_row["line_name"], zone_name=alert_row["zone_name"])})
+                except Exception:
+                    pass
+            try:
+                await ws_manager.broadcast({"event": "node_update", "payload": {"node": node_id, "status": node_status}})
+            except Exception:
+                pass
     return {"message": "Alert acknowledged"}
 
 
@@ -173,6 +217,39 @@ async def escalate_alert(alert_id: str, payload: dict):
             "UPDATE alerts SET severity = 'critical', notes = %s WHERE id = %s RETURNING id;",
             (combined_notes, alert_id),
         )
+
+        # Update node status to critical (recompute for consistency)
+        await cur.execute("SELECT node_id FROM alerts WHERE id = %s", (alert_id,))
+        node_row = await cur.fetchone()
+        if node_row:
+            node_id = node_row["node_id"]
+            node_status = "critical"
+            await cur.execute("UPDATE nodes SET status = %s WHERE id = %s;", (node_status, node_id))
+
+            # Fetch updated alert row for broadcasting
+            await cur.execute(
+                """
+                SELECT alerts.*, nodes.line_id, lines.name AS line_name, zones.name AS zone_name,
+                       trains.number AS train_number
+                FROM alerts
+                JOIN nodes ON alerts.node_id = nodes.id
+                JOIN lines ON nodes.line_id = lines.id
+                JOIN zones ON lines.zone_id = zones.id
+                LEFT JOIN trains ON alerts.nearest_train_id = trains.id
+                WHERE alerts.id = %s
+                """,
+                (alert_id,),
+            )
+            alert_row = await cur.fetchone()
+            if alert_row:
+                try:
+                    await ws_manager.broadcast({"event": "alert_updated", "payload": row_to_alert_out(alert_row, line_name=alert_row["line_name"], zone_name=alert_row["zone_name"])})
+                except Exception:
+                    pass
+            try:
+                await ws_manager.broadcast({"event": "node_update", "payload": {"node": node_id, "status": node_status}})
+            except Exception:
+                pass
 
     return {"message": "Alert escalated", "note": note}
 

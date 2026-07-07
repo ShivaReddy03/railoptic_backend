@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from app.schemas.ingest import IngestResponse
 from app.configuration.database import get_cursor
+from app.models.enums import NodeStatusEnum
 from app.services.r2 import upload_detection_image
 from app.services.roboflow import RoboflowInferenceError, infer_image
 from app.services.risk import compute_risk_score, severity_from_score
@@ -183,70 +184,102 @@ async def ingest_detection(
         object_category = None
         if top_prediction["class"]:
             object_category = f"{top_prediction['class'].title()} Detected"
+        object_category_text = object_category or "Hazard Detected"
+        severity = severity_from_score(risk_score)
 
         if hazard_count > 0 and risk_score >= 30:
             logger.info(f"Alert conditions met (hazard_count={hazard_count}, risk_score={risk_score}). Generating alert...")
-            alert_id = await _generate_alert_id(cur, detected_at.year)
-            severity = severity_from_score(risk_score)
-            title = f"{object_category or 'Hazard Detected'} on {line_name}"
-            confidence = round(top_prediction["confidence"] * 100)
-            distance_km = round(lidar_dist_m / 1000.0, 2)
 
-            logger.info(f"Inserting alert {alert_id} into database...")
+            # Keep alerts from spamming for the same node and same object type.
             await cur.execute(
-                "INSERT INTO alerts (id, node_id, object_category, title, source, severity, status, confidence, risk_score, distance_km, eta_sec, image_url, detected_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
-                (
-                    alert_id,
-                    node_id,
-                    object_category or "Hazard Detected",
-                    title,
-                    "AI Camera",
-                    severity,
-                    "active",
-                    confidence,
-                    risk_score,
-                    distance_km,
-                    None,
-                    image_url,
-                    detected_at,
-                ),
+                "SELECT id, status, severity, object_category FROM alerts "
+                "WHERE node_id = %s AND status = 'active' "
+                "ORDER BY detected_at DESC LIMIT 1;",
+                (node_id,),
             )
-            logger.info(f"Alert {alert_id} successfully saved to database.")
-            nearest_train = await _assign_trains_to_alert(cur, alert_id, line_id)
-            if nearest_train:
-                logger.info(f"Assigned nearest train {nearest_train['id']} to alert {alert_id}.")
+            existing_alert = await cur.fetchone()
+            if existing_alert and existing_alert["object_category"] == object_category_text and existing_alert["severity"] == severity:
+                alert_id = existing_alert["id"]
+                logger.info(f"Existing active alert {alert_id} on node {node_id} matched current detection; skipping duplicate alert creation.")
             else:
-                logger.info(f"No trains available to assign to alert {alert_id}.")
+                # Resolve any existing active alerts for this node before creating a new one.
+                await cur.execute(
+                    "UPDATE alerts SET status = 'resolved', resolved_at = NOW() WHERE node_id = %s AND status = 'active';",
+                    (node_id,),
+                )
+                alert_id = await _generate_alert_id(cur, detected_at.year)
+                title = f"{object_category_text} on {line_name}"
+                confidence = round(top_prediction["confidence"] * 100)
+                distance_km = round(lidar_dist_m / 1000.0, 2)
 
-            payload = {
-                "event": "new_alert",
-                "payload": {
-                    "id": alert_id,
-                    "date": detected_at.date().isoformat(),
-                    "time": detected_at.time().isoformat(timespec="seconds"),
-                    "zone": node_row["zone_name"],
-                    "line": line_name,
-                    "node": node_id,
-                    "objectCategory": object_category,
-                    "title": title,
-                    "source": "AI Camera",
-                    "location": f"{line_name} - Node {node_id}",
-                    "severity": severity,
-                    "status": "active",
-                    "confidence": confidence,
-                    "riskScore": risk_score,
-                    "nearestTrain": nearest_train["number"] if nearest_train else None,
-                    "distanceKm": distance_km,
-                    "etaSec": None,
-                    "imageUrl": image_url,
-                },
-            }
-            logger.info(f"Broadcasting alert {alert_id} to connected WebSocket clients...")
-            await ws_manager.broadcast(payload)
-            logger.info(f"Alert {alert_id} broadcast successfully.")
+                logger.info(f"Inserting alert {alert_id} into database...")
+                await cur.execute(
+                    "INSERT INTO alerts (id, node_id, object_category, title, source, severity, status, confidence, risk_score, distance_km, eta_sec, image_url, detected_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);",
+                    (
+                        alert_id,
+                        node_id,
+                        object_category_text,
+                        title,
+                        "AI Camera",
+                        severity,
+                        "active",
+                        confidence,
+                        risk_score,
+                        distance_km,
+                        None,
+                        image_url,
+                        detected_at,
+                    ),
+                )
+                logger.info(f"Alert {alert_id} successfully saved to database.")
+                nearest_train = await _assign_trains_to_alert(cur, alert_id, line_id)
+                if nearest_train:
+                    logger.info(f"Assigned nearest train {nearest_train['id']} to alert {alert_id}.")
+                else:
+                    logger.info(f"No trains available to assign to alert {alert_id}.")
+
+                payload = {
+                    "event": "new_alert",
+                    "payload": {
+                        "id": alert_id,
+                        "date": detected_at.date().isoformat(),
+                        "time": detected_at.time().isoformat(timespec="seconds"),
+                        "zone": node_row["zone_name"],
+                        "line": line_name,
+                        "node": node_id,
+                        "objectCategory": object_category_text,
+                        "title": title,
+                        "source": "AI Camera",
+                        "location": f"{line_name} - Node {node_id}",
+                        "severity": severity,
+                        "status": "active",
+                        "confidence": confidence,
+                        "riskScore": risk_score,
+                        "nearestTrain": nearest_train["number"] if nearest_train else None,
+                        "distanceKm": distance_km,
+                        "etaSec": None,
+                        "imageUrl": image_url,
+                    },
+                }
+                logger.info(f"Broadcasting alert {alert_id} to connected WebSocket clients...")
+                await ws_manager.broadcast(payload)
+                logger.info(f"Alert {alert_id} broadcast successfully.")
         else:
             logger.info(f"Alert conditions not met (hazard_count={hazard_count}, risk_score={risk_score}). No alert generated.")
+
+        if hazard_count == 0:
+            node_status = NodeStatusEnum.normal.value
+        elif severity == "critical":
+            node_status = NodeStatusEnum.critical.value
+        else:
+            node_status = NodeStatusEnum.warning.value
+
+        await cur.execute(
+            "UPDATE nodes SET status = %s, last_seen = %s WHERE id = %s;",
+            (node_status, detected_at, node_id),
+        )
+        logger.info(f"Node {node_id} status updated to {node_status}.")
 
     logger.info("Detection request processed successfully. Returning response.")
     return {

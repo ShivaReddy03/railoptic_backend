@@ -231,16 +231,19 @@ Used by `useNodes()` for Track Monitoring Overview. Returns a plain array (no pa
 ```json
 [
   {
-    "id":     "N001",
-    "line":   "North Line",
-    "gps":    { "lat": 17.385, "lng": 78.486 },
-    "status": "normal",
-    "health": 96
+    "id":             "N001",
+    "line":           "North Line",
+    "gps":            { "lat": 17.385, "lng": 78.486 },
+    "status":         "warning",
+    "health":         85,
+    "currentAlertId": "ALT-2026-0001"
   }
 ]
 ```
 
 **Notes**
+- `currentAlertId` is included only when the node `status` is `warning` or `critical` and contains the latest active alert ID for that node. For `normal` or `offline` nodes the value will be `null`.
+- The frontend can use `currentAlertId` to call `GET /alerts/{id}` and load detailed alert information.
 - Region-scoped: if caller role is `section_controller` or `maintenance`, filter by their assigned zone.
 - No query params required from the frontend.
 
