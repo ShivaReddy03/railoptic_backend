@@ -99,6 +99,22 @@ async def _generate_alert_id(cur, year: int) -> str:
     return f"{prefix}{seq:04d}"
 
 
+async def _resolve_active_alerts_for_node(cur, node_id: str, resolved_at: datetime) -> list[str]:
+    await cur.execute(
+        "SELECT id FROM alerts WHERE node_id = %s AND status = 'active' ORDER BY detected_at DESC;",
+        (node_id,),
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return []
+
+    await cur.execute(
+        "UPDATE alerts SET status = 'resolved', resolved_at = %s WHERE node_id = %s AND status = 'active';",
+        (resolved_at, node_id),
+    )
+    return [row["id"] for row in rows]
+
+
 @router.post(
     "/detection",
     response_model=IngestResponse,
@@ -266,7 +282,14 @@ async def ingest_detection(
                 await ws_manager.broadcast(payload)
                 logger.info(f"Alert {alert_id} broadcast successfully.")
         else:
-            logger.info(f"Alert conditions not met (hazard_count={hazard_count}, risk_score={risk_score}). No alert generated.")
+            resolved_alert_ids = await _resolve_active_alerts_for_node(cur, node_id, detected_at)
+            if resolved_alert_ids:
+                logger.info(
+                    f"Alert conditions not met (hazard_count={hazard_count}, risk_score={risk_score}). "
+                    f"Resolving {len(resolved_alert_ids)} active alert(s) on node {node_id}."
+                )
+            else:
+                logger.info(f"Alert conditions not met (hazard_count={hazard_count}, risk_score={risk_score}). No alert generated.")
 
         if hazard_count == 0:
             node_status = NodeStatusEnum.normal.value
