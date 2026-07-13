@@ -86,7 +86,7 @@ async def list_alerts(
     status: str = Query("all", pattern="^(all|active|acknowledged|resolved)$"),
     zone: Optional[str] = None,
     line: Optional[str] = None,
-    escalated_to: str = Query("all", pattern="^(all|rpf|maintenance|both|none)$"),
+    escalated_to: str = Query("all", pattern="^(all|rpf|maintenance|none)$"),
 ):
     async with get_cursor() as cur:
         supports_escalation_target = await _alerts_support_escalation_target(cur)

@@ -1,4 +1,5 @@
 import math
+import re
 
 _LEVEL_BASE: dict[str, float] = {
     "high":   1.00,
@@ -99,9 +100,8 @@ def compute_risk_score(
     return max(0, min(100, round(combined * 100)))
 
 
-def severity_from_score(risk_score: int) -> str:
-    if risk_score >= 75:
+def severity_from_score(risk_score: int, class_name: str | None = None) -> str:
+    if class_name and re.search(r'(rock|elephant|tree)', class_name, re.IGNORECASE):
         return "critical"
-    if risk_score >= 40:
-        return "warning"
-    return "info"
+    
+    return "warning"

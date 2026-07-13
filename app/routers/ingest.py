@@ -201,7 +201,7 @@ async def ingest_detection(
         if top_prediction["class"]:
             object_category = f"{top_prediction['class'].title()} Detected"
         object_category_text = object_category or "Hazard Detected"
-        severity = severity_from_score(risk_score)
+        severity = severity_from_score(risk_score, top_prediction.get("class"))
 
         if hazard_count > 0 and risk_score >= 30:
             logger.info(f"Alert conditions met (hazard_count={hazard_count}, risk_score={risk_score}). Generating alert...")
