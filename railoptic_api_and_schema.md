@@ -100,6 +100,9 @@ CREATE TABLE alerts (
     acknowledged_at  TIMESTAMPTZ,
     resolved_at      TIMESTAMPTZ,
     acknowledged_by  INTEGER,                       -- FK to users when auth is added
+    escalated_to     VARCHAR(20),                   -- e.g. "rpf", "maintenance"
+    escalated_at     TIMESTAMPTZ,
+    escalated_by     INTEGER,
     notes            TEXT
 );
 
@@ -342,10 +345,14 @@ No request body needed. Sets `status = 'acknowledged'` and stamps `acknowledged_
 #### `POST /alerts/{id}/escalate`
 **Request body**
 ```json
-{ "note": "Contacting section controller immediately." }
+{ 
+  "note": "Contacting section controller immediately.",
+  "escalated_to": "rpf",
+  "escalated_by": 12
+}
 ```
 
-Sets `severity` to `critical` (if not already), appends `note` to `notes`, optionally triggers WebSocket broadcast.
+Sets `severity` to `critical` (if not already), appends `note` to `notes`, sets `escalated_to`, `escalated_at`, and `escalated_by` if provided. Optionally triggers WebSocket broadcast.
 
 **Response** — updated Alert object.
 
@@ -434,6 +441,9 @@ class AlertOut(BaseModel):
     distanceKm: Optional[float]
     etaSec: Optional[int]
     imageUrl: Optional[str]
+    escalatedTo: Optional[str]
+    escalatedAt: Optional[str]
+    escalatedBy: Optional[int]
 
     class Config:
         from_attributes = True

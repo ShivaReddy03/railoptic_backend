@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.routers import alert_router
 
@@ -64,6 +64,34 @@ class AlertRouterOrderingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(any("ORDER BY alerts.detected_at DESC" in sql for sql, _ in cursor.executed_sql))
         self.assertTrue(any("alerts.id DESC" in sql for sql, _ in cursor.executed_sql))
+
+    async def test_list_alerts_supports_escalated_to_filter(self):
+        cursor = FakeCursor()
+
+        def fake_get_cursor():
+            return FakeCursorContext(cursor)
+
+        with patch.object(alert_router, "get_cursor", side_effect=fake_get_cursor):
+            await alert_router.list_alerts(page=1, pageSize=10, escalated_to="rpf")
+
+        self.assertTrue(any("alerts.escalated_to = %s" in sql for sql, _ in cursor.executed_sql))
+
+    async def test_escalate_alert_accepts_team_target_without_breaking_old_payloads(self):
+        cursor = FakeCursor()
+        cursor._result = {"id": "ALT-2026-0001", "node_id": "NODE-1"}
+
+        def fake_get_cursor():
+            return FakeCursorContext(cursor)
+
+        with patch.object(alert_router, "get_cursor", side_effect=fake_get_cursor), \
+            patch.object(alert_router.ws_manager, "broadcast", new=AsyncMock()):
+            response = await alert_router.escalate_alert(
+                "ALT-2026-0001",
+                {"note": "Forward to maintenance", "team": "maintenance"},
+            )
+
+        self.assertEqual(response["escalated_to"], "maintenance")
+        self.assertTrue(any("escalated_to" in sql for sql, _ in cursor.executed_sql))
 
 
 if __name__ == "__main__":

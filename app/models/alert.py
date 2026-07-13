@@ -32,6 +32,9 @@ class Alert(Base):
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     acknowledged_by = Column(Integer, nullable=True)
+    escalated_to = Column(String(20), nullable=True)
+    escalated_at = Column(DateTime(timezone=True), nullable=True)
+    escalated_by = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
 
     node = relationship("Node", back_populates="alerts")

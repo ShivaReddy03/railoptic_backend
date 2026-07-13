@@ -21,6 +21,9 @@ class AlertOut(BaseModel):
     distanceKm: Optional[float] = None
     etaSec: Optional[int] = None
     imageUrl: Optional[str] = None
+    escalatedTo: Optional[str] = None
+    escalatedAt: Optional[str] = None
+    escalatedBy: Optional[int] = None
 
     class Config:
         alias_generator = lambda string: string
